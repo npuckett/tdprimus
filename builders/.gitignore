@@ -1,0 +1,10 @@
+# PrimusBridge command/result files (written by td_remote / TD)
+.td_cmd.json
+.td_result.json
+.td_build_kwargs.json
+.td_phase1_diag.json
+.td_phase2_diag.json
+.td_phase3_diag.json
+.td_phase4_diag.json
+.td_phase4_pardebug.json
+.td_discover.json
