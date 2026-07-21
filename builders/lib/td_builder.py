@@ -333,6 +333,9 @@ CUE_TABLE_COLS = [
     "targets",
     "a0_content",
     "a1_content",
+    "brightness",
+    "hue_shift",
+    "blackout",
     "fade",
     "notes",
 ]

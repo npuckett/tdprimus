@@ -240,4 +240,7 @@ def kwargs_for_phase(phase: int, settings: dict) -> dict:
         if sticky.get("device_rows_json"):
             kw["device_rows_json"] = str(sticky["device_rows_json"])
         return kw
+    if phase == 6:
+        # Phase 6 drives Phase 5 in-place; no single-device kwargs.
+        return {}
     return {}

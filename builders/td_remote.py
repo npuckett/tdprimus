@@ -340,6 +340,34 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_go(args: argparse.Namespace) -> int:
+    """Pulse Phase 6 GO via builders/.td_cue_cmd.json (polled by primus_phase6)."""
+    cue_path = BUILDERS / ".td_cue_cmd.json"
+    payload = {"cmd": "go", "id": uuid.uuid4().hex, "ts": time.time()}
+    BUILDERS.mkdir(parents=True, exist_ok=True)
+    cue_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    print(f"[td_remote] wrote {cue_path.relative_to(ROOT)} — waiting for Phase 6 to consume…")
+    # Phase 6 clears the file to {} when handled.
+    deadline = time.time() + float(args.timeout)
+    while time.time() < deadline:
+        if not cue_path.exists():
+            print("[td_remote] GO consumed (file removed)")
+            return 0
+        try:
+            raw = cue_path.read_text(encoding="utf-8").strip()
+            if raw in ("", "{}"):
+                print("[td_remote] GO consumed")
+                return 0
+        except Exception:
+            pass
+        time.sleep(0.1)
+    print(
+        "[td_remote] GO TIMEOUT — is Phase 6 built with go_execute active?",
+        file=sys.stderr,
+    )
+    return 3
+
+
 def cmd_recover(args: argparse.Namespace) -> int:
     """After a NIC/device flap: preflight, then rebuild Phase 5 (or --phase)."""
     phase = int(getattr(args, "phase", 5) or 5)
@@ -492,6 +520,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_pre.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     p_pre.set_defaults(func=cmd_preflight)
+
+    p_go = sub.add_parser("go", help="Pulse Phase 6 cue GO (requires primus_phase6)")
+    p_go.add_argument("--timeout", type=float, default=10.0)
+    p_go.set_defaults(func=cmd_go)
 
     p_rec = sub.add_parser(
         "recover",
