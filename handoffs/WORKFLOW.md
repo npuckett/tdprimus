@@ -68,6 +68,12 @@ Leave TD running. From the repo root in **Terminal**:
 # Bridge alive?
 python3 builders/td_remote.py ping
 
+# Wired NIC + device reachability (run before Phase 4/5 hardware work)
+python3 builders/td_remote.py preflight --bridge
+
+# After a NIC/device flap (device reconnected but dark): preflight + rebuild
+python3 builders/td_remote.py recover
+
 # Phase N (1-8)
 python3 builders/td_remote.py build 1
 
@@ -128,7 +134,7 @@ Prefer the CLI when iterating from Cursor so errors land in `.td_result.json`.
 | 8 Remote cfg | `td_remote.py build 8` | [phase8_test.md](phase8_test.md) |
 | 9 Components | Run `phase9_components.py` in TD Textport | [phase9_test.md](phase9_test.md) |
 
-Phase 1 stays **split** (single output). Phase 2 dual-output is validated in **split**. Phase 3 live virtual requires firmware **3.11+** (workshop device on **3.13**). Phase 4 samples any selected TOP (demo, Movie File In, or a wired external TOP) by point/line/ROI/fit geometry, then packages the RGB samples for one device before multi-device. `td_remote.py` currently accepts Phase 1–8; Phase 9 is invoked directly in TD as its builder header shows.
+Phase 1 stays **split** (single output). Phase 2 dual-output is validated in **split**. Phase 3 live virtual requires firmware **3.11+** (workshop device on **3.13**). Phase 4 samples any selected TOP (demo, Movie File In, or a wired external TOP) by point/line/ROI/fit geometry. Phase 5 applies that sampler/sender path independently to every active `devices` profile row and feeds it from `SharedMedia`; use `td_remote.py build 5` / `recover`, then edit profile rows or pass `--devices devices.json`. **Handoff 5** workshop profile: `primus_a` `192.168.8.166` + `primus_b` `192.168.8.164` (both active, split). Confirm independent LED content before Phase 6 cues. `td_remote.py` currently accepts Phase 1–8; Phase 9 is invoked directly in TD as its builder header shows.
 
 ---
 
@@ -162,6 +168,12 @@ python3 builders/td_remote.py selftest
 |---------|-----|
 | `td_remote` times out | TD not running, Bridge missing, or `.toe` not in repo root — re-run `install()` |
 | `create_child` ImportError | Stale `sys.modules` — purge + `install()` snippet above |
-| No light on device | Check IP/universe, Art-Net Active on `dmx_out`, correct network interface, split vs combined |
-| Last frame stuck lit | Firmware holds last ArtDmx — set blackout / send zeros (Phase 1 `controls.blackout=1`) |
-| Wrong NIC | Bind DMX Out / UDP to Thunderbolt Ethernet interface |
+| `preflight` FAIL bind_ip | `en4` (or wired NIC) lost `192.168.8.199` — reattach Thunderbolt Ethernet / renew DHCP |
+| `preflight` FAIL ping | Device off, wrong LAN, or L2 broken — do not build until ICMP (or ArtPoll) works |
+| Phase 5 `config/bind failed` | Build still creates samplers but fails loud in `.td_result.json` — fix `bind_ip` / NIC, then `recover` |
+| Device reconnected but dark | Config was one-shot; run `recover`. Live sender now re-pushes config every ~5s and recreates UDP on send fail |
+| Stops updating / ~10s blackouts | Check `primus_a/link.state` and `.td_phase5_diag.json` `sends` climbing; ensure `artnet_cook` cookalways |
+| `link.state=bind_fail` / `send_fail` | NIC flap or stale socket — sender retries with backoff; if stuck, `preflight` then `recover` |
+| No light on device | Run `preflight`, check `link` table, IP/universe, `bind_ip`, split vs combined, only Phase 5 sending |
+| Last frame stuck lit | Firmware holds last ArtDmx — set blackout / send zeros |
+| Wrong NIC | Bind UDP with `--bind-ip 192.168.8.199` (Phase 4) or the row's `bind_ip` (Phase 5) |

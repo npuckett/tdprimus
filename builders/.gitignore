@@ -7,4 +7,6 @@
 .td_phase3_diag.json
 .td_phase4_diag.json
 .td_phase4_pardebug.json
+.td_phase5_diag.json
+.td_phase5_build.json
 .td_discover.json

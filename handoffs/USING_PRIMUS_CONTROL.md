@@ -1,8 +1,9 @@
 # Using Primus from TouchDesigner
 
 This is the operating guide for the current PrimusV3/V4 TouchDesigner setup.
-The validated milestone is **Phase 4**: one receiver, two independently
-sampled outputs (`a0` and `a1`), and split or combined ArtDmx packaging.
+The current multi-output milestone is **Phase 5**: table-driven receivers,
+each with two independently sampled outputs (`a0` and `a1`) and split or
+combined ArtDmx packaging.
 
 ## Architecture
 
@@ -11,9 +12,9 @@ PrimusControl / td_remote.py
             ↓ build request
        PrimusBridge
             ↓ reloads builders from disk
-   /project1/primus_phase4
+   /project1/primus_phase5
             ↓
- per-output source → sampler → ArtDmx → Primus receiver
+ SharedMedia → per-device samplers → ArtDmx → Primus receivers
 ```
 
 - **`/project1/PrimusControl`** is the small control COMP. Its `settings` Table
@@ -27,6 +28,11 @@ PrimusControl / td_remote.py
 
 Phase 4 configures the receiver then sends RGB ArtDmx bytes directly from its
 `artnet_cook` Script CHOP. It does not use a TD DMX Out CHOP.
+
+Phase 5 keeps that direct sender per receiver profile. Its `devices` Table DAT
+contains transport settings (`ip`, `bind_ip`, universe, mode, output types,
+virtual counts, and `active`); each generated receiver COMP has a separate
+`sampling` Table DAT for source geometry, brightness, rate, and blackout.
 
 ## Install and rebuild
 
@@ -52,6 +58,7 @@ install()
 Leave TD running, then build from Terminal/Cursor:
 
 ```bash
+python3 builders/td_remote.py preflight --bridge
 python3 builders/td_remote.py ping
 python3 builders/td_remote.py build 4 \
   --ip 192.168.8.166 --universe 0 \
@@ -146,3 +153,47 @@ use `roi_fit`; `fit` also uses the active ROI in the current sampler.
 For a hardware-specific verification sequence, use
 [`phase4_test.md`](phase4_test.md). For the build/test loop and error recovery,
 use [`WORKFLOW.md`](WORKFLOW.md).
+
+## Phase 5 multi-device media
+
+Build it with:
+
+```bash
+python3 builders/td_remote.py preflight --bridge
+python3 builders/td_remote.py build 5
+```
+
+`preflight` confirms the wired `bind_ip` is on this Mac and the receiver
+answers ping. Phase 5 fails the build (sticky in `.td_result.json`) if
+config/bind UDP cannot be sent, instead of succeeding with a mute wire.
+
+After a Thunderbolt/device reconnect when LEDs stay dark:
+
+```bash
+python3 builders/td_remote.py recover
+```
+
+Each device COMP has a `link` table (`state`, `sends`, `reconnects`,
+`last_error`) and a `frame_cook` Execute DAT that force-cooks the sender every
+frame. Healthy live send shows `link.state=ok` and climbing
+`builders/.td_phase5_diag.json` `sends`. The sender recreates its UDP socket
+after bind/send failures and re-pushes output/receive/virtual config about
+every 5s (`sampling.config_refresh_s`) so a post-reset receiver is
+reconfigured without a manual rebuild.
+
+Per-device packing dim: edit `primus_a/sampling` → `brightness` (**0..1**,
+default `0.1`). It scales the packed ArtDmx bytes after sampling, so full-white
+media can still be brought down safely. `0` is off; `1` is full. Legacy `level`
+(0–255) is still honored if `brightness` is absent.
+
+The generated `/project1/primus_phase5/SharedMedia` COMP holds the shared,
+durable demo/movie/external TOP bus. Wire show TOPs to `bus_a0_ext` or
+`bus_a1_ext`, set the respective `a*_source` field in the device row to `ext`,
+then rebuild. `demo`, `alt`, `movie`, and `ext` are valid source keys. `demo` and `alt` are
+phase-shifted gradients so two receivers can look distinct while sharing the bus.
+
+The first default row is active for `192.168.8.166` / `192.168.8.199` in split
+mode. The `primus_b` row is disabled safely until a second receiver IP is
+assigned and `active=1`. For profile JSON supplied from the shell, use
+`td_remote.py build 5 --devices devices.json`. See
+[`phase5_multidevice_test.md`](phase5_multidevice_test.md) for verification.

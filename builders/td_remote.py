@@ -4,6 +4,7 @@ Drive TouchDesigner Primus builds from the shell / Cursor (no Textport paste).
 
 Requires a one-time Textport install (see `install` command). After that:
 
+    python3 builders/td_remote.py preflight --bridge
     python3 builders/td_remote.py build 1
     python3 builders/td_remote.py build 1 --ip 192.168.8.166 --universe 0 --a0-type small_grid
     python3 builders/td_remote.py status
@@ -13,6 +14,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import subprocess
 import sys
 import time
 import uuid
@@ -25,6 +28,7 @@ RESULT_PATH = BUILDERS / ".td_result.json"
 KWARGS_PATH = BUILDERS / ".td_build_kwargs.json"
 
 DEFAULT_IP = "192.168.8.166"
+DEFAULT_BIND_IP = "192.168.8.199"
 DEFAULT_UNIVERSE = 0
 DEFAULT_A0 = "small_grid"
 DEFAULT_A1 = "long_strip"
@@ -124,6 +128,22 @@ def cmd_build(args: argparse.Namespace) -> int:
         sticky_body["a1_source"] = int(args.a1_source)
     if getattr(args, "bind_ip", None):
         sticky_body["bind_ip"] = str(args.bind_ip)
+    if getattr(args, "devices", None):
+        supplied = str(args.devices)
+        candidate = Path(supplied).expanduser()
+        try:
+            device_rows = (
+                json.loads(candidate.read_text(encoding="utf-8"))
+                if candidate.exists()
+                else json.loads(supplied)
+            )
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"error: --devices must be a JSON list or path to one: {exc}", file=sys.stderr)
+            return 2
+        if not isinstance(device_rows, list):
+            print("error: --devices JSON must be a list of device-profile objects", file=sys.stderr)
+            return 2
+        sticky_body["device_rows_json"] = json.dumps(device_rows)
     KWARGS_PATH.write_text(json.dumps(sticky_body, indent=2) + "\n", encoding="utf-8")
     cmd_id = payload["id"]
     print(
@@ -249,6 +269,119 @@ def cmd_ping(args: argparse.Namespace) -> int:
     return 3
 
 
+def _local_ipv4s() -> list[str]:
+    try:
+        text = subprocess.check_output(["ifconfig"], text=True)
+    except Exception:
+        return []
+    return re.findall(r"inet (\d+\.\d+\.\d+\.\d+)", text)
+
+
+def _icmp_reachable(ip: str, count: int = 2) -> bool:
+    try:
+        completed = subprocess.run(
+            ["ping", "-c", str(count), "-W", "2000", ip],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+        return completed.returncode == 0
+    except Exception:
+        return False
+
+
+def cmd_preflight(args: argparse.Namespace) -> int:
+    """Check bind_ip is local and device IP answers ICMP before a build."""
+    bind_ip = str(args.bind_ip or DEFAULT_BIND_IP).strip()
+    device_ip = str(args.ip or DEFAULT_IP).strip()
+    local = _local_ipv4s()
+    ok = True
+
+    print(f"[preflight] local IPv4: {', '.join(local) or '(none)'}")
+    if bind_ip in local:
+        print(f"[preflight] OK bind_ip {bind_ip} is on this host")
+    else:
+        print(
+            f"[preflight] FAIL: bind_ip {bind_ip} not assigned to any local interface "
+            "(Thunderbolt Ethernet may have lost its address)",
+            file=sys.stderr,
+        )
+        ok = False
+
+    if _icmp_reachable(device_ip):
+        print(f"[preflight] OK ping {device_ip}")
+    else:
+        print(
+            f"[preflight] FAIL: no ICMP reply from {device_ip} "
+            "(device power / LAN / wrong subnet)",
+            file=sys.stderr,
+        )
+        ok = False
+
+    if getattr(args, "bridge", False):
+        print("[preflight] checking PrimusBridge...")
+        bridge_rc = cmd_ping(args)
+        if bridge_rc != 0:
+            ok = False
+        else:
+            print("[preflight] OK PrimusBridge")
+
+    if ok:
+        print(
+            f"[preflight] PASS — safe to build "
+            f"(e.g. python3 builders/td_remote.py build 5)"
+        )
+        return 0
+    print(
+        "[preflight] FAIL — fix network / device / Bridge before building",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def cmd_recover(args: argparse.Namespace) -> int:
+    """After a NIC/device flap: preflight, then rebuild Phase 5 (or --phase)."""
+    phase = int(getattr(args, "phase", 5) or 5)
+    print(f"[recover] preflight then build phase {phase}...")
+    pre = argparse.Namespace(
+        ip=args.ip,
+        bind_ip=args.bind_ip,
+        bridge=True,
+        timeout=args.timeout,
+    )
+    rc = cmd_preflight(pre)
+    if rc != 0:
+        print("[recover] aborted — fix network before rebuilding", file=sys.stderr)
+        return rc
+    build = argparse.Namespace(
+        phase=phase,
+        ip=args.ip,
+        universe=DEFAULT_UNIVERSE,
+        a0_type=DEFAULT_A0,
+        a1_type=DEFAULT_A1,
+        recv_mode="split",
+        pattern="thirds",
+        a0_virtual=1,
+        a1_virtual=72,
+        a0_source=None,
+        a1_source=None,
+        bind_ip=args.bind_ip,
+        devices=None,
+        a0_pattern="solid_red",
+        a1_pattern="thirds",
+        level=64,
+        timeout=args.timeout,
+    )
+    rc = cmd_build(build)
+    if rc == 0:
+        print(
+            "[recover] rebuild OK — watch primus_a/link.state=ok and "
+            "builders/.td_phase5_diag.json (sends should climb)"
+        )
+    return rc
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Remote-control TouchDesigner Primus phase builds via files."
@@ -295,6 +428,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Local NIC IP to bind UDP (wired), e.g. 192.168.8.199",
     )
     p_build.add_argument(
+        "--devices",
+        help="Phase 5: JSON profile list, or a path to a JSON file",
+    )
+    p_build.add_argument(
         "--a0-pattern",
         dest="a0_pattern",
         default="solid_red",
@@ -336,6 +473,45 @@ def main(argv: list[str] | None = None) -> int:
     p_ping = sub.add_parser("ping", help="Ask PrimusBridge for a pong (TD must be running)")
     p_ping.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     p_ping.set_defaults(func=cmd_ping)
+
+    p_pre = sub.add_parser(
+        "preflight",
+        help="Verify bind_ip is local and device IP answers ping before building",
+    )
+    p_pre.add_argument("--ip", default=DEFAULT_IP, help=f"Device IP (default {DEFAULT_IP})")
+    p_pre.add_argument(
+        "--bind-ip",
+        dest="bind_ip",
+        default=DEFAULT_BIND_IP,
+        help=f"Local NIC IP that must exist (default {DEFAULT_BIND_IP})",
+    )
+    p_pre.add_argument(
+        "--bridge",
+        action="store_true",
+        help="Also ping PrimusBridge in TouchDesigner",
+    )
+    p_pre.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
+    p_pre.set_defaults(func=cmd_preflight)
+
+    p_rec = sub.add_parser(
+        "recover",
+        help="Preflight then rebuild Phase 5 after a NIC/device reconnect",
+    )
+    p_rec.add_argument("--ip", default=DEFAULT_IP, help=f"Device IP (default {DEFAULT_IP})")
+    p_rec.add_argument(
+        "--bind-ip",
+        dest="bind_ip",
+        default=DEFAULT_BIND_IP,
+        help=f"Local NIC IP (default {DEFAULT_BIND_IP})",
+    )
+    p_rec.add_argument(
+        "--phase",
+        type=int,
+        default=5,
+        help="Phase to rebuild after preflight (default 5)",
+    )
+    p_rec.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
+    p_rec.set_defaults(func=cmd_recover)
 
     p_self = sub.add_parser(
         "selftest", help="Dry-run write/read cmd+result JSON without TouchDesigner"

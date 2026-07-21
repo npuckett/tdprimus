@@ -232,4 +232,12 @@ def kwargs_for_phase(phase: int, settings: dict) -> dict:
         if merged.get("bind_ip") is not None:
             kw["bind_ip"] = str(merged["bind_ip"])
         return kw
+    if phase == 5:
+        # Phase 5 owns a persistent device-profile table.  A CLI JSON list is
+        # an explicit replacement for its default rows, useful before TD has a
+        # table to edit.  Do not pass the generic single-device settings here.
+        kw = {}
+        if sticky.get("device_rows_json"):
+            kw["device_rows_json"] = str(sticky["device_rows_json"])
+        return kw
     return {}

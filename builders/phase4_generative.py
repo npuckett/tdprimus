@@ -175,11 +175,33 @@ def onCook(scriptOp):
         try: movie.par.file = str(_cell(ctrl, prefix + "_movie", ""))
         except Exception: pass
 
+    def out_cfg(types):
+        ids = {"none":0,"short_strip":1,"long_strip":2,"grid":3,"small_grid":4,"extra_long_strip":5}
+        pkt = bytearray(15); pkt[:8] = b"Art-Net\x00"; struct.pack_into("<H", pkt, 8, 0x8100); struct.pack_into(">H", pkt, 10, 14); pkt[12] = 2
+        pkt[13] = ids.get(types[0], 0); pkt[14] = ids.get(types[1], 0); return bytes(pkt)
+
+    def recv_cfg(mode_name, univ):
+        pkt = bytearray(15); pkt[:8] = b"Art-Net\x00"; struct.pack_into("<H", pkt, 8, 0x8110); struct.pack_into(">H", pkt, 10, 14)
+        pkt[12] = 1 if mode_name == "combined" else 0; struct.pack_into("<H", pkt, 13, univ & 0xffff); return bytes(pkt)
+
+    def drop_sock(reason):
+        old = scriptOp.fetch("udp_sock", None)
+        try:
+            if old: old.close()
+        except Exception: pass
+        scriptOp.store("udp_sock", None); scriptOp.store("udp_bind", None)
+        scriptOp.store("config_key", None); scriptOp.store("force_config", True)
+        scriptOp.store("last_error", reason)
+        scriptOp.store("reconnects", int(scriptOp.fetch("reconnects", 0)) + 1)
+        scriptOp.store("retry_after", time.time() + .5)
+        print("[phase4]", reason)
+
     now = time.time()
+    if now < float(scriptOp.fetch("retry_after", 0.0)):
+        scriptOp.clear(); return
     last = float(scriptOp.fetch("last_send_t", 0.0))
     if now - last < 1.0 / fps:
-        scriptOp.clear()
-        return
+        scriptOp.clear(); return
     scriptOp.store("last_send_t", now)
     sock = scriptOp.fetch("udp_sock", None)
     if sock is None or scriptOp.fetch("udp_bind", None) != bind_ip:
@@ -189,21 +211,35 @@ def onCook(scriptOp):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         if bind_ip:
             try: sock.bind((bind_ip, 0))
-            except OSError as exc: print("[phase4] bind_ip failed:", exc)
+            except OSError as exc:
+                drop_sock("bind_ip failed: " + str(exc)); scriptOp.clear(); return
         scriptOp.store("udp_sock", sock); scriptOp.store("udp_bind", bind_ip)
+        scriptOp.store("force_config", True); scriptOp.store("last_error", "")
 
-    desired, pushed = (v0, v1), scriptOp.fetch("virt_key", None)
-    pending = scriptOp.fetch("pending_virt", None)
-    if desired != pushed:
-        if pending != desired:
-            scriptOp.store("pending_virt", desired); scriptOp.store("pending_virt_t", now)
-        elif now - float(scriptOp.fetch("pending_virt_t", now)) >= .35:
-            try:
-                sock.sendto(art_virtual(desired), (ip, 6454))
-                scriptOp.store("virt_key", desired); scriptOp.store("pending_virt", None)
-            except Exception as exc: print("[phase4] virtual send failed:", exc)
+    config_key = (a0_type, a1_type, mode, universe, v0, v1)
+    refresh_s = max(2.0, number("config_refresh_s", 5.0))
+    need_config = (
+        bool(scriptOp.fetch("force_config", True))
+        or scriptOp.fetch("config_key", None) != config_key
+        or now - float(scriptOp.fetch("last_config_t", 0.0)) >= refresh_s
+    )
+    if need_config:
+        try:
+            sock.sendto(out_cfg((a0_type, a1_type)), (ip, 6454))
+            sock.sendto(recv_cfg(mode, universe), (ip, 6454))
+            sock.sendto(art_virtual((v0, v1)), (ip, 6454))
+            scriptOp.store("config_key", config_key); scriptOp.store("last_config_t", now)
+            scriptOp.store("force_config", False); scriptOp.store("virt_key", (v0, v1))
+            scriptOp.store("last_error", "")
+        except Exception as exc:
+            drop_sock("config send failed: " + str(exc)); scriptOp.clear(); return
 
     blackout = str(_cell(ctrl, "blackout", "0")) == "1"
+    for name in ("a0_demo", "a1_demo", "a0_select", "a1_select", "a0_media", "a1_media"):
+        top = root.op(name)
+        if top is not None:
+            try: top.cook(force=True)
+            except Exception: pass
     try:
         a0 = bytes(v0 * 3) if blackout else sample(root.op("a0_media").numpyArray(), v0, "a0", level)
         a1 = bytes(v1 * 3) if blackout else sample(root.op("a1_media").numpyArray(), v1, "a1", level)
@@ -220,18 +256,24 @@ def onCook(scriptOp):
         else:
             if v0: sock.sendto(art_dmx(universe, a0, sequence), (ip, 6454)); packets.append({"universe": universe, "payload_len": len(a0)})
             if v1: sock.sendto(art_dmx(universe + 1, a1, sequence), (ip, 6454)); packets.append({"universe": universe + 1, "payload_len": len(a1)})
-    except Exception as exc: print("[phase4] ArtDmx send failed:", exc)
-    if sequence % 90 == 0:
+    except Exception as exc:
+        drop_sock("ArtDmx send failed: " + str(exc)); scriptOp.clear(); return
+    sends = int(scriptOp.fetch("sends", 0)) + 1; scriptOp.store("sends", sends)
+    if sends == 1 or sends % 30 == 0:
         try:
             from pathlib import Path
             import json
             Path(project.folder, "builders", ".td_phase4_diag.json").write_text(json.dumps({
                 "phase": 4, "live": True, "ip": ip, "bind_ip": bind_ip or None,
                 "recv_mode": mode, "a0_virtual": v0, "a1_virtual": v1, "level": level,
+                "sends": sends, "reconnects": int(scriptOp.fetch("reconnects", 0)),
                 "a0_mode": _cell(ctrl, "a0_sample_mode"), "a1_mode": _cell(ctrl, "a1_sample_mode"),
                 "packets": packets, "a0_first_rgb": list(a0[:3]), "a1_first_rgb": list(a1[:3]),
+                "last_error": scriptOp.fetch("last_error", ""),
             }, indent=2) + "\n")
         except Exception: pass
+        if sends == 1:
+            print("[phase4] live ArtDmx →", ip)
     scriptOp.clear()
 '''
 
@@ -261,6 +303,19 @@ def onCook(scriptOp):
         arr[0, i, :3] = [payload[i * 3] / 255., payload[i * 3 + 1] / 255., payload[i * 3 + 2] / 255.]
     arr[:, :, 3] = 1
     scriptOp.copyNumpyArray(arr)
+'''
+
+_FRAME_COOK = r'''
+def onFrameStart(frame):
+    parent = me.parent()
+    for name in ("a0_demo", "a1_demo", "artnet_cook"):
+        node = parent.op(name)
+        if node is None:
+            continue
+        try:
+            node.cook(force=True)
+        except Exception:
+            pass
 '''
 
 
@@ -312,7 +367,7 @@ def _media_branch(base, prefix, x, y, speed):
     place(grad_cb, x, y + 120)
     demo = create_child(base, "scriptTOP", f"{prefix}_demo")
     place(demo, x, y)
-    set_par(demo, callbacks=grad_cb.path)
+    set_par(demo, callbacks=grad_cb.path, cookalways=True)
     _force_res(demo, 512, 96)
     demo.store("speed", speed)
 
@@ -394,7 +449,8 @@ def build(
     values = [
         ("active", "1"), ("blackout", "0"), ("device_ip", device_ip), ("ip", device_ip),
         ("bind_ip", bind_ip), ("universe", str(universe)), ("recv_mode", mode),
-        ("level", str(level)), ("send_fps", "30"), ("a0_type", a0_type), ("a1_type", a1_type),
+        ("level", str(level)), ("send_fps", "30"), ("config_refresh_s", "5"),
+        ("a0_type", a0_type), ("a1_type", a1_type),
         ("a0_virtual", str(v0)), ("a1_virtual", str(v1)),
     ]
     for prefix, virt, sample_mode in (("a0", v0, "point"), ("a1", v1, "hline")):
@@ -412,7 +468,17 @@ def build(
     place(callbacks, 0, 600)
     sender = create_child(base, "scriptCHOP", "artnet_cook")
     place(sender, 220, 600)
-    set_par(sender, callbacks=callbacks.path)
+    # cookalways alone is unreliable on Script CHOP; frame_cook force-cooks.
+    set_par(sender, callbacks=callbacks.path, cookalways=True)
+    frame = create_child(base, "executeDAT", "frame_cook")
+    place(frame, 220, 720)
+    frame.text = _FRAME_COOK
+    for flag in ("framestart", "frameStart", "active"):
+        try:
+            getattr(frame.par, flag).val = True
+        except Exception:
+            pass
+    set_par(frame, framestart=True, active=True)
     try:
         sender.cook(force=True)
     except Exception as exc:

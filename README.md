@@ -1,8 +1,9 @@
 # tdprimus
 
 TouchDesigner integration for PrimusV3/V4 Art-Net receivers. The current
-milestone is one-device, media-agnostic sampling: select any TOP, sample it
-into per-output RGB payloads, and package those bytes as Primus ArtDmx.
+milestone is table-driven multi-device, media-agnostic sampling: shared TOP
+sources feed independent per-output samplers, which package RGB bytes as
+Primus ArtDmx per receiver.
 
 ## Start here
 
@@ -23,15 +24,16 @@ Other useful references:
 ## Current architecture
 
 ```text
-selected TOP → Phase 4 sampler → RGB byte payload → ArtDmx → Primus receiver
-                         ↑
-                  controls Table DAT
+SharedMedia → Phase 5 per-device sampler → ArtDmx → Primus receivers
+                    ↑
+         device profile + sampling tables
 ```
 
 `/project1/PrimusControl` starts phase builds; `/project1/PrimusBridge` accepts
 commands from `builders/td_remote.py` and reloads the builder code in the open
-`.toe`. Phase 4 owns two output branches, `a0` and `a1`, and supports demo,
-movie, and external TOP sources per branch.
+`.toe`. Phase 5 scales the Phase 4 two-output sampler/sender path to every
+active receiver profile and supports shared demo, movie, and external TOP
+sources.
 
 ## Repository layout
 
