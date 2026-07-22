@@ -220,3 +220,31 @@ mode. The `primus_b` row is disabled safely until a second receiver IP is
 assigned and `active=1`. For profile JSON supplied from the shell, use
 `td_remote.py build 5 --devices devices.json`. See
 [`phase5_multidevice_test.md`](phase5_multidevice_test.md) for verification.
+
+## Packaged COMPs (Phase 9)
+
+Phase 9 packages the Phase 5 ArtDmx path into drop-in COMPs (cue deck deferred).
+System map: [`primus_system_map.md`](primus_system_map.md).
+
+```text
+Show TOPs ──wire──► PrimusOutput (in1–4 → A0/A1 media) ──ArtDmx──► Primus
+                         ▲
+              PrimusManager (Bindip / Sendfps / Brightness / Rescan / Sync)
+```
+
+```bash
+python3 builders/td_remote.py preflight --bridge
+python3 builders/td_remote.py build 9
+python3 builders/td_remote.py manager rescan
+python3 builders/td_remote.py manager create_outputs
+python3 builders/td_remote.py recover --phase 9
+```
+
+- **PrimusManager** — shared bind IP, send FPS, brightness scale, Rescan, **Create / Sync Outputs** (add-missing; never destroys wiring).
+- **PrimusOutput** — one per receiver. Inputs **1–2** → A0 media1/2, **3–4** → A1 media1/2. Unwired slots use demos. Compact `ui` panel shows sources + send strips.
+- **Managerpath** — set explicitly, or leave blank to auto-find a sibling Manager.
+- **PrimusMediaBus** — optional demo generators; export as third `.tox`.
+- Live health: Output `link` / `ui/status` + `builders/.td_phase9_diag_<name>.json`.
+- Export `.tox`: see [`tox/README.md`](../tox/README.md). Tests: [`phase9_test.md`](phase9_test.md).
+
+Cues remain Phase 6 (`td_remote.py go`) until a later packaging pass.

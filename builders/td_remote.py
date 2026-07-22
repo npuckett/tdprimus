@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
 import re
 import subprocess
 import sys
@@ -23,6 +24,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 BUILDERS = ROOT / "builders"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 CMD_PATH = BUILDERS / ".td_cmd.json"
 RESULT_PATH = BUILDERS / ".td_result.json"
 KWARGS_PATH = BUILDERS / ".td_build_kwargs.json"
@@ -80,8 +83,8 @@ def _read_result() -> dict | None:
 
 def cmd_build(args: argparse.Namespace) -> int:
     phase = int(args.phase)
-    if phase < 1 or phase > 8:
-        print(f"error: phase must be 1-8, got {phase}", file=sys.stderr)
+    if phase < 1 or phase > 9:
+        print(f"error: phase must be 1-9, got {phase}", file=sys.stderr)
         return 2
 
     # Snapshot prior result id so we do not accept a stale file as success.
@@ -270,17 +273,44 @@ def cmd_ping(args: argparse.Namespace) -> int:
 
 
 def _local_ipv4s() -> list[str]:
+    """List host IPv4 addresses (macOS ifconfig / Windows ipconfig / Linux ip)."""
+    system = platform.system()
     try:
-        text = subprocess.check_output(["ifconfig"], text=True)
+        if system == "Windows":
+            text = subprocess.check_output(["ipconfig"], text=True, errors="replace")
+            # IPv4 Address. . . . . . . . . . . : 192.168.1.10
+            return re.findall(
+                r"(?:IPv4 Address|IP Address)[^\d]*(\d+\.\d+\.\d+\.\d+)",
+                text,
+                flags=re.IGNORECASE,
+            )
+        if system == "Linux":
+            try:
+                text = subprocess.check_output(
+                    ["ip", "-4", "-o", "addr", "show"], text=True, errors="replace"
+                )
+                return re.findall(r"inet (\d+\.\d+\.\d+\.\d+)", text)
+            except Exception:
+                pass
+        text = subprocess.check_output(["ifconfig"], text=True, errors="replace")
+        return re.findall(r"inet (\d+\.\d+\.\d+\.\d+)", text)
     except Exception:
         return []
-    return re.findall(r"inet (\d+\.\d+\.\d+\.\d+)", text)
 
 
 def _icmp_reachable(ip: str, count: int = 2) -> bool:
+    """ICMP ping with platform-appropriate flags."""
+    system = platform.system()
+    if system == "Windows":
+        cmd = ["ping", "-n", str(count), "-w", "2000", ip]
+    else:
+        # macOS/BSD: -W is milliseconds; Linux ping often uses -W seconds.
+        # Prefer -W 2000 on Darwin; on Linux use -W 2.
+        wait = "2000" if system == "Darwin" else "2"
+        cmd = ["ping", "-c", str(count), "-W", wait, ip]
     try:
         completed = subprocess.run(
-            ["ping", "-c", str(count), "-W", "2000", ip],
+            cmd,
             capture_output=True,
             text=True,
             timeout=15,
@@ -436,6 +466,49 @@ def cmd_go(args: argparse.Namespace) -> int:
     return 3
 
 
+def cmd_manager(args: argparse.Namespace) -> int:
+    """Drive PrimusManager via builders/.td_manager_cmd.json (Phase 9)."""
+    action = (args.action or "rescan").lower().replace("-", "_")
+    if action in ("createoutputs", "create"):
+        action = "create_outputs"
+    if action not in ("rescan", "create_outputs"):
+        print(f"error: manager action must be rescan or create_outputs, got {action}", file=sys.stderr)
+        return 2
+    path = BUILDERS / ".td_manager_cmd.json"
+    payload = {"cmd": action, "id": uuid.uuid4().hex, "ts": time.time()}
+    BUILDERS.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    print(f"[td_remote] manager {action} → {path.relative_to(ROOT)}")
+    deadline = time.time() + float(args.timeout)
+    result_path = BUILDERS / ".td_phase9_discover.json"
+    prior_mtime = result_path.stat().st_mtime if result_path.exists() else 0.0
+    while time.time() < deadline:
+        try:
+            raw = path.read_text(encoding="utf-8").strip()
+            if raw in ("", "{}"):
+                if action == "rescan" and result_path.exists() and result_path.stat().st_mtime >= prior_mtime:
+                    data = json.loads(result_path.read_text(encoding="utf-8"))
+                    print(
+                        f"[td_remote] manager rescan OK — "
+                        f"{data.get('primus', '?')} Primus, {data.get('other', '?')} other"
+                    )
+                    _print_json(data)
+                    return 0
+                if action == "create_outputs":
+                    print("[td_remote] manager create_outputs consumed")
+                    return 0
+                # rescan consumed but result not yet written
+        except Exception:
+            pass
+        time.sleep(0.2)
+    print(
+        "[td_remote] manager TIMEOUT — build Phase 9 first "
+        "(python3 builders/td_remote.py build 9)",
+        file=sys.stderr,
+    )
+    return 3
+
+
 def cmd_recover(args: argparse.Namespace) -> int:
     """After a NIC/device flap: preflight, then rebuild Phase 5 (or --phase)."""
     phase = int(getattr(args, "phase", 5) or 5)
@@ -471,10 +544,16 @@ def cmd_recover(args: argparse.Namespace) -> int:
     )
     rc = cmd_build(build)
     if rc == 0:
-        print(
-            "[recover] rebuild OK — watch primus_a/link.state=ok and "
-            "builders/.td_phase5_diag.json (sends should climb)"
-        )
+        if phase >= 9:
+            print(
+                "[recover] rebuild OK — watch PrimusOutput link.state=ok and "
+                "builders/.td_phase9_diag_*.json (sends should climb)"
+            )
+        else:
+            print(
+                "[recover] rebuild OK — watch primus_a/link.state=ok and "
+                "builders/.td_phase5_diag.json (sends should climb)"
+            )
     return rc
 
 
@@ -488,7 +567,7 @@ def main(argv: list[str] | None = None) -> int:
     p_install.set_defaults(func=cmd_install)
 
     p_build = sub.add_parser("build", help="Queue a phase build for PrimusBridge")
-    p_build.add_argument("phase", type=int, help="Phase number 1-8")
+    p_build.add_argument("phase", type=int, help="Phase number 1-9")
     p_build.add_argument("--ip", default=DEFAULT_IP, help=f"Device IP (default {DEFAULT_IP})")
     p_build.add_argument(
         "--universe", type=int, default=DEFAULT_UNIVERSE, help="Art-Net universe"
@@ -618,6 +697,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     p_go.add_argument("--timeout", type=float, default=10.0)
     p_go.set_defaults(func=cmd_go)
+
+    p_mgr = sub.add_parser(
+        "manager",
+        help="Phase 9 PrimusManager control (rescan / create_outputs)",
+    )
+    p_mgr.add_argument(
+        "action",
+        nargs="?",
+        default="rescan",
+        help="rescan | create_outputs (default rescan)",
+    )
+    p_mgr.add_argument("--timeout", type=float, default=10.0)
+    p_mgr.set_defaults(func=cmd_manager)
 
     p_rec = sub.add_parser(
         "recover",

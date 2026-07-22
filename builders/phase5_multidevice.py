@@ -204,6 +204,7 @@ def onCook(scriptOp):
         if raw != "": return clamp(number("brightness", .1))
         return clamp(integer(sample, "level", 26) / 255.)
     def drop_sock(reason):
+        """Close UDP, back off, and rate-limit Textport spam while host is down."""
         sock = scriptOp.fetch("udp_sock", None)
         try:
             if sock: sock.close()
@@ -211,9 +212,20 @@ def onCook(scriptOp):
         scriptOp.store("udp_sock", None); scriptOp.store("udp_bind", None)
         scriptOp.store("config_key", None); scriptOp.store("force_config", True)
         scriptOp.store("last_error", reason)
+        fails = int(scriptOp.fetch("fail_streak", 0)) + 1
+        scriptOp.store("fail_streak", fails)
         scriptOp.store("reconnects", int(scriptOp.fetch("reconnects", 0)) + 1)
-        scriptOp.store("retry_after", time.time() + .5)
-        print("[phase5]", root.name, reason)
+        # Exponential backoff: 0.5 → 1 → 2 → 4 → 8s (cap).
+        delay = min(8.0, 0.5 * (2 ** min(fails - 1, 4)))
+        scriptOp.store("retry_after", time.time() + delay)
+        # Print first failure, then at most once every 10s for the same reason.
+        last_reason = str(scriptOp.fetch("log_reason", ""))
+        last_log_t = float(scriptOp.fetch("log_t", 0))
+        now_log = time.time()
+        if reason != last_reason or (now_log - last_log_t) >= 10.0:
+            print("[phase5]", root.name, reason, "(retry in %.1fs)" % delay)
+            scriptOp.store("log_reason", reason)
+            scriptOp.store("log_t", now_log)
     ip, bind_ip = str(_cell(profile, "ip", "")).strip(), str(_cell(profile, "bind_ip", "")).strip()
     mode, universe = str(_cell(profile, "recv_mode", "split")).lower(), integer(profile, "universe", 0)
     a0_type, a1_type = str(_cell(profile, "a0_type", "small_grid")), str(_cell(profile, "a1_type", "long_strip"))
@@ -285,7 +297,13 @@ def onCook(scriptOp):
         _set_link(root, [("state", "send_fail"), ("ip", ip), ("last_error", scriptOp.fetch("last_error", "")), ("reconnects", scriptOp.fetch("reconnects", 0))])
         scriptOp.clear(); return
     sends = int(scriptOp.fetch("sends", 0)) + 1; scriptOp.store("sends", sends)
+    prev_err = str(scriptOp.fetch("last_error", "") or "")
+    fail_streak = int(scriptOp.fetch("fail_streak", 0))
     scriptOp.store("last_ok_t", now); scriptOp.store("last_error", "")
+    scriptOp.store("fail_streak", 0)
+    if fail_streak > 0 or prev_err:
+        print("[phase5]", root.name, "recovered →", ip)
+        scriptOp.store("log_reason", "")
     _set_link(root, [
         ("state", "ok"), ("ip", ip), ("bind_ip", bind_ip), ("recv_mode", mode),
         ("a0_virtual", v0), ("a1_virtual", v1), ("brightness", round(gain, 3)),
