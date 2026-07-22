@@ -243,4 +243,9 @@ def kwargs_for_phase(phase: int, settings: dict) -> dict:
     if phase == 6:
         # Phase 6 drives Phase 5 in-place; no single-device kwargs.
         return {}
+    if phase == 7:
+        kw = {}
+        if sticky.get("bind_ip") is not None and sticky.get("bind_ip") != "":
+            kw["bind_ip"] = str(sticky["bind_ip"])
+        return kw
     return {}

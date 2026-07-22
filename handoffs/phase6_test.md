@@ -1,49 +1,80 @@
-# Handoff 6 — cue system over Phase 5
+# Handoff 6 — Cue Deck (UI + OSC-ready)
 
 Builder: [`builders/phase6_cues.py`](../builders/phase6_cues.py)
 
-Phase 6 does **not** send ArtDmx itself. It drives
-`/project1/primus_phase5` device COMPs: source select (`demo`/`alt`/`movie`/`ext`),
-`brightness`, `hue_shift`, and `blackout`. Untargeted devices keep their last look.
+Phase 6 is a **cue deck** on top of Phase 5. It does not send ArtDmx. GO / Goto /
+Blackout change Phase 5 device looks. The same actions are exposed for future
+show control over **OSC**.
 
-Requires Phase 5 already built (workshop: `primus_a` `.166` + `primus_b` `.164`).
+Requires Phase 5 (`primus_a` + `primus_b`).
 
 ```bash
 python3 builders/td_remote.py build 6
-python3 builders/td_remote.py go          # advance one cue
 ```
 
-Or Textport: `op('/project1/primus_phase6/controls')['go',1]=1`
+## How to use (UI)
 
-## Cue columns
+1. Select `/project1/primus_phase6` in the network.
+2. Open the **Cue** parameter page:
+   - **GO** — advance to the next cue
+   - **Cue #** + **Goto** — jump to that cue number
+   - **Blackout** / **Restore** — hard all-device blackout (not a list step)
+3. Watch **Status** on that page, or the `status` / `cue_state` tables.
+4. Edit the `cues` table to change looks/targets.
 
-| Column | Meaning |
-|--------|---------|
-| `cue` | Cue number label |
-| `targets` | `*` / `group:NAME` / `primus_a` (comma-separated) |
-| `a0_content` / `a1_content` | `demo` \| `alt` \| `movie` \| `ext` \| `black` |
-| `brightness` | 0..1 packed dim |
-| `hue_shift` | Channel rotate for distinct looks |
-| `blackout` | `1` zeros matched devices |
-| `fade` | Reserved (not yet a Cross TOP fade) |
-| `notes` | Free text |
+## OSC map (network show control)
 
-Default list: (1) all demo → (2) all alt+hue → (3) only A → (4) only B → (5) blackout.
+UDP port **7000** by default (`Cue.Oscport`). Same API as the panel:
+
+| Address | Args | Action |
+|---------|------|--------|
+| `/primus/cue/go` | — | Next cue |
+| `/primus/cue/goto` | `int` cue number | Jump to cue |
+| `/primus/cue/blackout` | `0` or `1` | Restore / blackout all |
+
+Example (from another machine on the LAN):
+
+```bash
+# requires oscsend / similar
+oscsend 192.168.8.199 7000 /primus/cue/go
+oscsend 192.168.8.199 7000 /primus/cue/goto i 3
+oscsend 192.168.8.199 7000 /primus/cue/blackout i 1
+```
+
+Panel, OSC, and shell all call `cue_api` — add new show-control messages there.
+
+## Shell
+
+```bash
+python3 builders/td_remote.py go
+python3 builders/td_remote.py go --goto 3
+python3 builders/td_remote.py go --blackout 1
+python3 builders/td_remote.py go --blackout 0
+```
+
+## Default cues (4)
+
+| # | Look |
+|---|------|
+| 1 | **Both same** → `demo` |
+| 2 | **Both same** → `alt` + hue |
+| 3 | **Different** → A `demo`, B `alt` (content `split`) |
+| 4 | **Both blackout** → wraps to 1 |
 
 ## Checklist
 
-- [ ] `build 6` succeeds only when Phase 5 exists
-- [ ] First cue applied at build; both devices show cue-1 look
-- [ ] `td_remote.py go` advances; `cue_state.cue_number` / `last_applied` update
-- [ ] Cue 3 changes only `primus_a`; `primus_b` holds prior look
-- [ ] Cue 4 changes only `primus_b`
-- [ ] Cue 5 blacks both
-- [ ] GO wraps from last cue back to cue 1
+- [ ] `build 6` OK with Phase 5 present
+- [ ] Cue page **GO** advances looks on hardware
+- [ ] Cue 3 shows different looks on A vs B at the same time
+- [ ] Cue 4 / **Blackout** blacks both; **Restore** recovers
+- [ ] OSC `/primus/cue/go` advances (when a sender is available)
+- [ ] `td_remote.py go --goto 4` blacks both
 
 ## Reply template
 
 ```
 Handoff 6: PASS / FAIL
-GO targeting: OK / FAIL
+UI: OK / FAIL
+OSC smoke: OK / SKIP / FAIL
 Notes: …
 ```

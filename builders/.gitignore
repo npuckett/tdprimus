@@ -10,5 +10,8 @@
 .td_phase5_diag.json
 .td_phase5_build.json
 .td_phase6_build.json
+.td_phase7_build.json
+.td_phase7_discover.json
 .td_cue_cmd.json
+.td_discover_cmd.json
 .td_discover.json

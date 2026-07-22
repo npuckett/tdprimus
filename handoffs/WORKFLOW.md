@@ -2,6 +2,8 @@
 
 Verified workflow for building and testing PrimusV3 networks from this repo without pasting phase scripts into Textport.
 
+**Current checkpoint:** see [STATUS.md](STATUS.md) (Phases 5–7 verified; Phase 8 deferred).
+
 ## Prerequisites
 
 - TouchDesigner open with a `.toe` **saved in this repo root** (`project.folder` → `tdprimus`)
@@ -134,7 +136,7 @@ Prefer the CLI when iterating from Cursor so errors land in `.td_result.json`.
 | 8 Remote cfg | `td_remote.py build 8` | [phase8_test.md](phase8_test.md) |
 | 9 Components | Run `phase9_components.py` in TD Textport | [phase9_test.md](phase9_test.md) |
 
-Phase 1 stays **split** (single output). Phase 2 dual-output is validated in **split**. Phase 3 live virtual requires firmware **3.11+** (workshop device on **3.13**). Phase 4 samples any selected TOP (demo, Movie File In, or a wired external TOP) by point/line/ROI/fit geometry. Phase 5 applies that sampler/sender path independently to every active `devices` profile row and feeds it from `SharedMedia`; use `td_remote.py build 5` / `recover`, then edit profile rows or pass `--devices devices.json`. **Handoff 5** workshop profile: `primus_a` `192.168.8.166` + `primus_b` `192.168.8.164` (both active, split). **Phase 6** cues drive Phase 5 in place: `td_remote.py build 6` then `td_remote.py go`. `td_remote.py` currently accepts Phase 1–8; Phase 9 is invoked directly in TD as its builder header shows.
+Phase 1 stays **split** (single output). Phase 2 dual-output is validated in **split**. Phase 3 live virtual requires firmware **3.11+** (workshop device on **3.13**). Phase 4 samples any selected TOP (demo, Movie File In, or a wired external TOP) by point/line/ROI/fit geometry. Phase 5 applies that sampler/sender path independently to every active `devices` profile row and feeds it from `SharedMedia`; use `td_remote.py build 5` / `recover`, then edit profile rows or pass `--devices devices.json`. **Handoff 5** workshop profile: `primus_a` `192.168.8.166` + `primus_b` `192.168.8.164` (both active, split). **Phase 6** cues drive Phase 5 in place: `td_remote.py build 6` then `td_remote.py go`. **Phase 7** discovery: `td_remote.py build 7` then `td_remote.py discover` (ArtPoll → devices table). `td_remote.py` currently accepts Phase 1–8; Phase 9 is invoked directly in TD as its builder header shows.
 
 ---
 

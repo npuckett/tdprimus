@@ -1,39 +1,40 @@
 # tdprimus
 
-TouchDesigner integration for PrimusV3/V4 Art-Net receivers. The current
-milestone is table-driven multi-device, media-agnostic sampling: shared TOP
-sources feed independent per-output samplers, which package RGB bytes as
-Primus ArtDmx per receiver.
+TouchDesigner integration for PrimusV3/V4 Art-Net receivers.
+
+**Checkpoint (2026-07-21):** Phases **5–7** are working on the workshop LAN
+(dual-device ArtDmx, cue deck, ArtPoll discovery). Phase **8+** not started.
+See [`handoffs/STATUS.md`](handoffs/STATUS.md) for the full “where things are”
+snapshot.
 
 ## Start here
 
-[`handoffs/USING_PRIMUS_CONTROL.md`](handoffs/USING_PRIMUS_CONTROL.md) is the
-primary TouchDesigner-facing guide. It covers the installed control/bridge
-COMPs, rebuilding, network settings, Phase 4 media wiring and sampling, and
-the tables and viewers used during a show.
+1. [`handoffs/STATUS.md`](handoffs/STATUS.md) — current workshop state & resume checklist  
+2. [`handoffs/USING_PRIMUS_CONTROL.md`](handoffs/USING_PRIMUS_CONTROL.md) — TD + CLI operator guide  
+3. [`handoffs/WORKFLOW.md`](handoffs/WORKFLOW.md) — install Bridge, build/test loop, recovery  
 
-Other useful references:
-
-- [`handoffs/WORKFLOW.md`](handoffs/WORKFLOW.md): build/test loop and recovery.
-- [`handoffs/phase4_test.md`](handoffs/phase4_test.md): Phase 4 hardware test.
-- [`handoffs/multi_output_organization.md`](handoffs/multi_output_organization.md):
-  practical design direction for the next multi-output phase.
-- [`protocol/PrimusV3_ArtNet_Reference.md`](protocol/PrimusV3_ArtNet_Reference.md):
-  packet and firmware protocol reference.
+Protocol reference: [`protocol/PrimusV3_ArtNet_Reference.md`](protocol/PrimusV3_ArtNet_Reference.md).
 
 ## Current architecture
 
 ```text
-SharedMedia → Phase 5 per-device sampler → ArtDmx → Primus receivers
-                    ↑
-         device profile + sampling tables
+SharedMedia ──► Phase 5 per-device sampler/sender ──► ArtDmx ──► Primus
+                      ▲
+               Phase 6 cue deck (GO / Goto / Blackout)
+Phase 7 ArtPoll ──► devices table (Phase-5-shaped inventory)
 ```
 
+| Phase | What | Shell |
+|-------|------|--------|
+| 5 Multi-device | Dual receivers, reconnect, SharedMedia | `td_remote.py build 5` / `recover` |
+| 6 Cues | Cue UI + OSC-ready map (UDP 7000) | `build 6` then `go` / `--goto` / `--blackout` |
+| 7 Discovery | ArtPoll → `devices` | `build 7` then `discover` |
+
+Workshop defaults: bind `192.168.8.199`, devices `.166` (A15) + `.164` (A13),
+**split** mode, sampling brightness **0.1**.
+
 `/project1/PrimusControl` starts phase builds; `/project1/PrimusBridge` accepts
-commands from `builders/td_remote.py` and reloads the builder code in the open
-`.toe`. Phase 5 scales the Phase 4 two-output sampler/sender path to every
-active receiver profile and supports shared demo, movie, and external TOP
-sources.
+`builders/td_remote.py` commands and reloads builder code in the open `.toe`.
 
 ## Repository layout
 
@@ -41,13 +42,12 @@ sources.
 |---|---|
 | [`builders/`](builders/) | Phase builders, remote CLI, packet helpers, offline checks |
 | [`extensions/`](extensions/) | Sources synced into the installed Bridge/component workflow |
-| [`handoffs/`](handoffs/) | Primary operating guide, test handoffs, and next-phase notes |
+| [`handoffs/`](handoffs/) | Operator guide, STATUS, phase test handoffs |
 | [`protocol/`](protocol/) | PrimusV3/V4 Art-Net reference |
 | [`tox/`](tox/) | Instructions for manually exporting TD Palette components |
 
-The builder scripts are the source of truth. `.toe` and `.tox` files are
-TouchDesigner-generated artifacts and are intentionally not required to rebuild
-the system.
+Builder scripts are the source of truth. `.toe` / `.tox` artifacts are not
+required to rebuild the system.
 
 ## Offline checks
 

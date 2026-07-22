@@ -1,23 +1,23 @@
-"""PrimusCueEngineExt — GO / Goto for cue table."""
+"""PrimusCueEngineExt — GO / Goto / Blackout for Phase 6 cue deck."""
 
 
 class PrimusCueEngineExt:
     def __init__(self, ownerComp):
         self.ownerComp = ownerComp
 
+    def _api(self):
+        ns = {"op": op, "project": project}  # noqa: F821
+        api = self.ownerComp.op("cue_api")
+        if api is None:
+            raise RuntimeError("cue_api missing — rebuild Phase 6")
+        exec(api.text, ns)
+        return ns
+
     def Go(self):
-        c = self.ownerComp.op("controls")
-        if c:
-            c["go", 1] = 1
+        return self._api()["go"](self.ownerComp, source="ext")
 
     def Goto(self, cue_number):
-        cues = self.ownerComp.op("cues")
-        state = self.ownerComp.op("cue_state")
-        if not cues or not state:
-            return
-        for r in range(1, cues.numRows):
-            if cues[r, "cue"].val == str(cue_number):
-                state["cue_index", 1] = r - 1
-                self.Go()
-                return
-        print(f"[PrimusCueEngine] cue {cue_number} not found")
+        return self._api()["goto"](cue_number, self.ownerComp, source="ext")
+
+    def Blackout(self, on=True):
+        return self._api()["blackout"](bool(on), self.ownerComp, source="ext")

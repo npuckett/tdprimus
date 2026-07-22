@@ -161,7 +161,30 @@ Build it with:
 ```bash
 python3 builders/td_remote.py preflight --bridge
 python3 builders/td_remote.py build 5
+python3 builders/td_remote.py build 6   # cue deck UI + OSC on port 7000
 ```
+
+### Cue deck (Phase 6)
+
+Select `/project1/primus_phase6` → **Cue** page: **GO**, **Cue #** + **Goto**,
+**Blackout** / **Restore**. Same actions over OSC UDP `7000`:
+
+- `/primus/cue/go`
+- `/primus/cue/goto <n>`
+- `/primus/cue/blackout <0|1>`
+
+Shell: `python3 builders/td_remote.py go` / `--goto N` / `--blackout 1`.
+
+### Discovery (Phase 7)
+
+```bash
+python3 builders/td_remote.py build 7
+python3 builders/td_remote.py discover
+# or without TD: python3 builders/td_remote.py discover --offline
+```
+
+Select `/project1/primus_phase7` → **Discovery** → **Rescan**. Results land in
+the `devices` table (Phase-5-shaped rows) and `builders/.td_phase7_discover.json`.
 
 `preflight` confirms the wired `bind_ip` is on this Mac and the receiver
 answers ping. Phase 5 fails the build (sticky in `.td_result.json`) if

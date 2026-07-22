@@ -340,29 +340,97 @@ def cmd_preflight(args: argparse.Namespace) -> int:
     return 1
 
 
-def cmd_go(args: argparse.Namespace) -> int:
-    """Pulse Phase 6 GO via builders/.td_cue_cmd.json (polled by primus_phase6)."""
-    cue_path = BUILDERS / ".td_cue_cmd.json"
-    payload = {"cmd": "go", "id": uuid.uuid4().hex, "ts": time.time()}
+def cmd_discover(args: argparse.Namespace) -> int:
+    """Ask Phase 7 to ArtPoll (or run offline discover_device if TD skip)."""
+    if getattr(args, "offline", False):
+        from builders.discover_device import discover, enrich
+
+        bind = str(args.bind_ip or DEFAULT_BIND_IP)
+        print(f"[td_remote] offline ArtPoll bind={bind}…")
+        nodes = [enrich(n) for n in discover(timeout=float(args.timeout), bind_ip=bind)]
+        primus = [n for n in nodes if n.get("is_primus")]
+        print(f"[td_remote] found {len(primus)} Primus / {len(nodes)} total")
+        for n in primus:
+            print(f"  {n.get('ip')}  {n.get('short_name')}  fw={n.get('firmware_version')}  {n.get('receive_mode')}")
+        out = BUILDERS / ".td_phase7_discover.json"
+        out.write_text(
+            json.dumps({"phase": 7, "offline": True, "bind_ip": bind, "nodes": primus}, indent=2)
+            + "\n",
+            encoding="utf-8",
+        )
+        return 0 if primus else 1
+
+    cue_path = BUILDERS / ".td_discover_cmd.json"
+    payload = {"cmd": "rescan", "id": uuid.uuid4().hex, "ts": time.time()}
     BUILDERS.mkdir(parents=True, exist_ok=True)
     cue_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    print(f"[td_remote] wrote {cue_path.relative_to(ROOT)} — waiting for Phase 6 to consume…")
-    # Phase 6 clears the file to {} when handled.
+    print(f"[td_remote] discover → {cue_path.relative_to(ROOT)}")
+    deadline = time.time() + float(args.timeout) + 3.0
+    result_path = BUILDERS / ".td_phase7_discover.json"
+    prior_mtime = result_path.stat().st_mtime if result_path.exists() else 0.0
+    while time.time() < deadline:
+        try:
+            raw = cue_path.read_text(encoding="utf-8").strip()
+            if raw in ("", "{}"):
+                if result_path.exists() and result_path.stat().st_mtime >= prior_mtime:
+                    data = json.loads(result_path.read_text(encoding="utf-8"))
+                    print(
+                        f"[td_remote] discover OK — "
+                        f"{data.get('primus', '?')} Primus, {data.get('other', '?')} other"
+                    )
+                    _print_json(data)
+                    return 0
+        except Exception:
+            pass
+        time.sleep(0.2)
+    print(
+        "[td_remote] discover TIMEOUT — build Phase 7 first "
+        "(python3 builders/td_remote.py build 7)",
+        file=sys.stderr,
+    )
+    return 3
+
+
+def cmd_go(args: argparse.Namespace) -> int:
+    """Drive Phase 6 via builders/.td_cue_cmd.json (polled by primus_phase6)."""
+    cue_path = BUILDERS / ".td_cue_cmd.json"
+    if getattr(args, "blackout", None) is not None:
+        payload = {
+            "cmd": "blackout",
+            "on": bool(args.blackout),
+            "id": uuid.uuid4().hex,
+            "ts": time.time(),
+        }
+        label = f"blackout={'on' if args.blackout else 'off'}"
+    elif getattr(args, "goto", None) is not None:
+        payload = {
+            "cmd": "goto",
+            "cue": int(args.goto),
+            "id": uuid.uuid4().hex,
+            "ts": time.time(),
+        }
+        label = f"goto {args.goto}"
+    else:
+        payload = {"cmd": "go", "id": uuid.uuid4().hex, "ts": time.time()}
+        label = "go"
+    BUILDERS.mkdir(parents=True, exist_ok=True)
+    cue_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    print(f"[td_remote] {label} → {cue_path.relative_to(ROOT)}")
     deadline = time.time() + float(args.timeout)
     while time.time() < deadline:
         if not cue_path.exists():
-            print("[td_remote] GO consumed (file removed)")
+            print(f"[td_remote] {label} consumed")
             return 0
         try:
             raw = cue_path.read_text(encoding="utf-8").strip()
             if raw in ("", "{}"):
-                print("[td_remote] GO consumed")
+                print(f"[td_remote] {label} consumed")
                 return 0
         except Exception:
             pass
         time.sleep(0.1)
     print(
-        "[td_remote] GO TIMEOUT — is Phase 6 built with go_execute active?",
+        "[td_remote] TIMEOUT — is Phase 6 built with go_execute active?",
         file=sys.stderr,
     )
     return 3
@@ -521,7 +589,33 @@ def main(argv: list[str] | None = None) -> int:
     p_pre.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     p_pre.set_defaults(func=cmd_preflight)
 
-    p_go = sub.add_parser("go", help="Pulse Phase 6 cue GO (requires primus_phase6)")
+    p_disc = sub.add_parser(
+        "discover",
+        help="Phase 7 ArtPoll rescan (or --offline without TD)",
+    )
+    p_disc.add_argument(
+        "--bind-ip",
+        dest="bind_ip",
+        default=DEFAULT_BIND_IP,
+        help=f"Local NIC IP (default {DEFAULT_BIND_IP})",
+    )
+    p_disc.add_argument(
+        "--offline",
+        action="store_true",
+        help="Run builders/discover_device.py in this shell (no Phase 7 COMP)",
+    )
+    p_disc.add_argument("--timeout", type=float, default=2.0)
+    p_disc.set_defaults(func=cmd_discover)
+
+    p_go = sub.add_parser("go", help="Phase 6 cue control (GO / goto / blackout)")
+    p_go.add_argument("--goto", type=int, default=None, help="Jump to cue number")
+    p_go.add_argument(
+        "--blackout",
+        type=int,
+        choices=(0, 1),
+        default=None,
+        help="1=blackout all devices, 0=restore",
+    )
     p_go.add_argument("--timeout", type=float, default=10.0)
     p_go.set_defaults(func=cmd_go)
 
